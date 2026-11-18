@@ -9,8 +9,13 @@ The scripts contain no organization names, IDs, passwords or tokens. Anything sp
 
 | File | Global | Used for |
 |---|---|---|
-| `frh-helpers-v9.js` | `window.frh` | Rescues and templates: find, read, plan and apply changes, publish, cancel and restore, create (one-time and recurring), copy, Rescue CSV export |
-| `frh-records-v1.js` | `window.frhRec` | Donor, recipient and volunteer records and their sites: create, edit, set Active or Inactive |
+| `frh-core-v10.js` | `window.frh` | Core: find rescues (with unclaimed / available / claimed filters), read a rescue, look up a volunteer, and the module loader `frh.use(...)` |
+| `frh-rescues-v10.js` | `frh.use('rescues')` | Change rescues: plan and apply changes, publish, cancel and restore, Rescue CSV export and compare (`frh.diff`) |
+| `frh-templates-v10.js` | `frh.use('templates')` | Recurring templates (schedule, repeat, publish, cancel), with the rescues module |
+| `frh-create-v10.js` | `frh.use('create')` | Create rescues (one-time and recurring) and copies, saved as Drafts |
+| `frh-records-v2.js` | `window.frhRec` | Donor, recipient and volunteer records and their sites: create (with a duplicate check), edit, set Active or Inactive, recipient site hours, location photos |
+
+Earlier files (`frh-helpers-v9.js`, `frh-records-v1.js`) stay for anyone still on tag `v9`.
 
 ## How it works
 
@@ -27,6 +32,7 @@ Every change follows the same pattern: **plan, confirm, apply, re-read to verify
 - Nothing is ever deleted. Rescues can only be canceled, with a reason.
 - New rescues are saved as Drafts. Publishing is a separate confirmed step and sends no notifications unless you ask.
 - Date ranges FRH silently ignores are refused instead of guessed.
+- Each job loads only the module it needs; read-only lookups load just the core.
 - Template edits show the affected dates before anything is saved.
 
 ## Requirements
