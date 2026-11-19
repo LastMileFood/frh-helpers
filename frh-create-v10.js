@@ -4,7 +4,8 @@
 const {norm,nm,mins,fmtT,fmtD,REP,repKind,reg}=frh._;
 // ===== C: create one rescue through the New Rescue wizard (/urc/new, a fresh page per rescue). Saves only as Draft.
 // frh.C(spec) fills and checks (saves nothing) -> frh.Cpreview() -> frh.Cstatus() until ready -> frh.Csave()
-// spec = {donor, date, start, end?|hours?, to: recipient, items:[{food, unit, qty, lbs?, desc, est?}], repeat?: 'weekly' | 'every other week' | 'monthly'}
+// spec = {donor | [donor1, donor2, ...], date, start, end?|hours?, to: recipient, items:[{donor?, food, unit, qty, lbs?, desc, est?}], repeat?: 'weekly' | 'every other week' | 'monthly'}
+// several donors = one rescue with a pickup at each (in list order); every item then names its donor: 1-based number or part of the location name
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const until=async(f,ms=15000)=>{const t=Date.now(); while(Date.now()-t<ms){ try{const v=f(); if(v) return v;}catch(e){} await sleep(300);} return null;};
 const fire=(e,t='change')=>e.dispatchEvent(new Event(t,{bubbles:true}));
@@ -33,20 +34,32 @@ const C=async(spec)=>{
   if(!location.pathname.startsWith('/urc/new')||window.frhC) return {errs:['navigate to /urc/new first (a fresh page for every rescue)']};
   const errs=[];
   const ds=await until(()=>{const s=document.getElementById('donor_location_id'); return s&&s.options.length>1&&s;}); if(!ds) return {errs:['page not ready']};
-  const d=pick(ds,spec.donor); if(d.errs) return {errs:d.errs.map(e=>'donor: '+e)};
-  $(ds).val(d.o.value).trigger('change'); if(!await until(()=>Object.values(donors_list).map(String).includes(d.o.value))) return {errs:['donor did not load: reload /urc/new and run again']};
+  // donors: one location, or a list for one rescue with several pickups (FRH's "Add New Donor"); each item then names its donor
+  const dons=[].concat(spec.donor??[]).filter(x=>x!=null&&x!==''), D=[]; if(!dons.length) return {errs:['donor required']};
+  for(let k=0;k<dons.length;k++){ const tag=dons.length>1?'donor '+(k+1)+': ':'donor: ';
+    const sel=k===0?ds:await (async()=>{ addMoreDonors(k); toggleDonorButtons(k); return until(()=>{const s=document.getElementById('selector_'+(k+1)); return s&&s.options.length>1&&s;},8000); })();
+    if(!sel) return {errs:[tag+'the Add New Donor box did not open: reload /urc/new and run again']};
+    const d=pick(sel,dons[k]); if(d.errs) return {errs:d.errs.map(e=>tag+e)}; if(D.some(x=>x.id===d.o.value)) return {errs:[tag+'same location as another donor']};
+    $(sel).val(d.o.value).trigger('change'); if(!await until(()=>Object.values(donors_list).map(String).includes(d.o.value))) return {errs:[tag+'did not load: reload /urc/new and run again']};
+    D.push({id:d.o.value,name:d.o.textContent.trim()}); await sleep(600); }
   const its=spec.items||[]; if(!its.length) return {errs:['no items']};
+  const whose=a=>{ if(D.length===1&&a.donor==null) return 0; if(a.donor==null) return 'several donors: give each item a donor (1-'+D.length+' or part of its name)';
+    const h=typeof a.donor==='number'||/^\d+$/.test(a.donor)?[+a.donor-1].filter(j=>D[j]):D.map((x,j)=>norm(x.name).includes(norm(a.donor))?j:-1).filter(j=>j>=0);
+    return h.length===1?h[0]:'donor '+a.donor+' matches '+h.length+' of '+D.map((x,j)=>(j+1)+' '+x.name).join(' / '); };
   while(NI('quantity').length<its.length){ [...document.querySelectorAll('a.add-item-button')].pop().click(); await sleep(400); }
   const q=NI('quantity'),ft=NI('food_type_id'),un=NI('donation_item_unit_id'),w=NI('weight'),de=NI('description'),es=NI('estimated'),dl=NI('donor_location_id'), rows=[];
-  for(let i=0;i<its.length;i++){ const a=its[i], n='#'+(i+1);
-    if(dl[i]&&dl[i].value!=d.o.value){ dl[i].value=d.o.value; fire(dl[i]); }
+  const used=new Set();
+  for(let i=0;i<its.length;i++){ const a=its[i], n='#'+(i+1), di=whose(a);
+    if(typeof di!=='number'){ errs.push(n+': '+di); continue; } used.add(di); const dn=D[di];
+    if(dl[i]&&dl[i].value!=dn.id){ if(![...dl[i].options].some(o=>o.value==dn.id)){ errs.push(n+': donor '+dn.name+' not offered on the item'); continue; } dl[i].value=dn.id; fire(dl[i]); $(dl[i]).trigger('change'); await sleep(150); }
     const f=pick(ft[i],a.food), u=pick(un[i],a.unit); if(f.errs){errs.push(n+' category: '+f.errs[0]);continue;} if(u.errs){errs.push(n+' pack: '+u.errs[0]);continue;}
     if(!(+a.qty>=1)) errs.push(n+': qty must be 1 or more'); if(!a.desc) errs.push(n+': description required');
     q[i].value=String(a.qty); fire(q[i],'input'); fire(q[i]);
     ft[i].value=f.o.value; fire(ft[i]); await sleep(150); un[i].value=u.o.value; fire(un[i]); await sleep(150);
     const own=a.lbs!=null&&a.lbs!==''; if(own){ w[i].value=String(Math.ceil(+a.lbs)); fire(w[i],'input'); fire(w[i]); } else if(!(+w[i].value>0)) errs.push(n+': no default weight for '+f.o.textContent.trim()+' / '+u.o.textContent.trim()+', give lbs');
     de[i].value=a.desc||''; fire(de[i],'input'); fire(de[i]); if(es[i]&&!!a.est!==es[i].checked) es[i].click();
-    rows.push((i+1)+': '+a.qty+' x '+w[i].value+' lbs tot '+(+a.qty*+w[i].value)+' | '+f.o.textContent.trim()+' / '+u.o.textContent.trim()+' | '+a.desc+(own?(+a.lbs!==Math.ceil(+a.lbs)?' ('+a.lbs+' rounded up)':''):' (default)')); }
+    rows.push((i+1)+': '+a.qty+' x '+w[i].value+' lbs tot '+(+a.qty*+w[i].value)+' | '+f.o.textContent.trim()+' / '+u.o.textContent.trim()+' | '+a.desc+(own?(+a.lbs!==Math.ceil(+a.lbs)?' ('+a.lbs+' rounded up)':''):' (default)')+(D.length>1?' | from '+(di+1)+' '+dn.name:'')); }
+  D.forEach((x,j)=>{ if(!used.has(j)) errs.push('donor '+(j+1)+' '+x.name+' has no items'); });
   const sc=await sched(spec,errs);
   if(errs.length) return {errs,items:rows};
   if(!await step(2)||!await step(3)||!await step(4)) return {errs:['wizard did not advance ('+nav()+'): reload /urc/new and run again']};
@@ -60,7 +73,7 @@ const C=async(spec)=>{
   if(!await until(()=>/All items have been distributed/.test(document.getElementById('step5').textContent),10000)) return {errs:['the distribution step did not load: reload /urc/new and run again']};
   const rec=await recur(spec.repeat,errs); if(errs.length) return {errs};
   window.frhC={date:sc.date,repeat:repKind(spec.repeat)};
-  return {errs,donor:d.o.value+' '+d.o.textContent.trim(),window:sc.window(),recurring:rec,items:rows,total:rows.reduce((a,r)=>a+ +(r.match(/tot (\d+)/)||[0,0])[1],0)+' lbs',to:p.o.value+' '+rn,next:'confirm with the Requester, then frh.Cpreview()'}; };
+  return {errs,donor:D.map(x=>x.id+' '+x.name).join(' + '),window:sc.window(),recurring:rec,items:rows,total:rows.reduce((a,r)=>a+ +(r.match(/tot (\d+)/)||[0,0])[1],0)+' lbs',to:p.o.value+' '+rn,next:'confirm with the Requester, then frh.Cpreview()'}; };
 // ===== K: copy an existing rescue (FRH's Actions > Copy) = frh.copy. On /urc/new?mode=copy&route_id=<R>: frh.copy({date, start?, end?|hours?, repeat?, items?:{'#n'|'<description>':{qty?, lbs?}}})
 // fills and checks (saves nothing); then frh.Cpreview() -> frh.Cstatus() -> frh.Csave() as for C. FRH keeps donor, items, recipients + split and the window time;
 // the date resets to today, the volunteer and added tags are not copied, every item comes back Estimated. With repeat, the copy is saved as a recurring template.
