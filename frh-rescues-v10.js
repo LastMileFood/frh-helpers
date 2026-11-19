@@ -148,13 +148,14 @@ const W=async(R,SET,DRY=true)=>{
   const bad=plan.map(p=>{const a=after.find(i=>i.id===p.id); return [p.id,K.filter(k=>n(k,a?.[k])!==n(k,p.want[k]))];}).filter(x=>x[1].length);
   return {ok:!bad.length,bad:bad.map(x=>x[0]+': '+x[1].join(',')),items:after.filter(i=>SET[i.id]).map(show),...info(d1)}; };
 
-// ===== I: add new donation items. ADD = [{donor?, qty, food, unit, desc, lbs?, est?, dupOk?}] =====
-const I=async(R,ADD=[],DRY=true)=>{
-  const val=(s,v)=>v==null||v===''?'':([...(s?.options||[])].find(o=>o.value&&(o.value==v||norm(o.textContent)==norm(v)))?.value??'!'+v);
-  const donors=d=>{const Tx=[...d.body.querySelectorAll('*')].filter(e=>!e.children.length).map(e=>e.textContent.replace(/\s+/g,' ').trim()).filter(Boolean), names=[];
+// donors on a rescue page, in pickup order: [{n, name, stop, action, ft, un, defs}] (I adds items to one; snap names each item's donor)
+const donors=d=>{const Tx=[...d.body.querySelectorAll('*')].filter(e=>!e.children.length).map(e=>e.textContent.replace(/\s+/g,' ').trim()).filter(Boolean), names=[];
     Tx.forEach((s,i)=>{const m=s.match(/^Donors? (\d+)$/); if(m) names[m[1]-1]=Tx[i+1];});
     return [...d.querySelectorAll('form[id^=new-item-form-]')].map(f=>{const k=+f.id.split('-').pop(), ft=d.getElementById('food-type-new-item-'+k), un=d.getElementById('unit-new-item-'+k);
       return {n:k+1,name:names[k],action:f.getAttribute('action'),stop:stopOf(f.getAttribute('action')),ft,un,defs:JSON.parse((ft?.getAttribute('onchange')||'').match(/\[\[.*?\]\]/)?.[0]||'[]')};});};
+// ===== I: add new donation items. ADD = [{donor?, qty, food, unit, desc, lbs?, est?, dupOk?}] =====
+const I=async(R,ADD=[],DRY=true)=>{
+  const val=(s,v)=>v==null||v===''?'':([...(s?.options||[])].find(o=>o.value&&(o.value==v||norm(o.textContent)==norm(v)))?.value??'!'+v);
   const view=(D,X)=>D.map(t=>'Donor '+t.n+' '+t.name+': '+X.filter(x=>x.stop===t.stop).map(x=>x.id+' '+x.qty+'x'+x.lbs+' '+x.desc).join('; '));
   const d0=await load(R), D=donors(d0), I0=items(d0), errs=[], plan=[];
   if(!D.length) errs.push('no Add New Item form on this rescue');
@@ -190,18 +191,19 @@ const snap=async R=>{ const d=await load(R), s=state(d), M=tagMap(d), its=items(
   const dt=v('start_date')?.getAttribute('value')||'', jd=new Date(dt.replace(/^(\w+), (\d+)/,'$1 $2,')), date=isNaN(jd)?dt:(jd.getMonth()+1)+'/'+jd.getDate()+'/'+jd.getFullYear();
   const st=sel(v('start_time')), dur=+sel(v('duration_in_hours')), sm=mins(st), end=sm==null?'':fmtT(sm+dur*60);
   const donor=[...d.querySelectorAll('a[href*="donor_locations/"]')].map(a=>a.textContent.replace(/\s+/g,' ').trim()).find(Boolean)||'';
+  const DN=donors(d), multi=DN.length>1, donorOf=k=>multi?(DN.find(t=>t.stop===its[k]?.stop)?.name||''):donor;
   const vol=s.volId?(cfg.vols.find(x=>x[2]==s.volId)?.[0]||s.vol):'', veh=s.tags.map(t=>tagName(M,t)).filter(t=>cfg.vehicles.some(v=>tn(v)===tn(t))).join(' ');
   const P=parse(d), sh=n=>(n||'').split(' - ')[0], stops=(P?.list||[]).map(x=>({name:sh(x.loc),q:x.items.map(i=>+i.quantity_estimated)}));
   const bad=stops.some(x=>x.q.length!==its.length);
   const to=k=>bad?'':stops.length===1?stops[0].name:stops.filter(x=>x.q[k]>0).map(x=>x.name+':'+x.q[k]).join('; ');
-  return {s,its,date,st,end,donor,vol,veh,stops,bad,to,dids:(P?.items||[]).map(i=>i.did)}; };
-// ===== X: export rescues as Rescue CSV rows (one per item). X([R,...]) -> {cols, rows}; values are %-encoded for & = ? % | (decode with unquote); empty cells at the end of a row are left off
+  return {s,its,date,st,end,donor,multi,donorOf,vol,veh,stops,bad,to,dids:(P?.items||[]).map(i=>i.did)}; };
+// ===== X: export rescues as Rescue CSV rows (one per item; a rescue with several donors has its item's donor on every row). X([R,...]) -> {cols, rows}; values are %-encoded for & = ? % | (decode with unquote); empty cells at the end of a row are left off
 const XC=['R','item_id','date','start','end','donor','category','pack','qty','lbs_each','description','estimated','to','volunteer','vehicle','status'];
 const X=async(Rs)=>{ Rs=(Array.isArray(Rs)?Rs:[Rs]).map(String); const enc=v=>String(v??'').replace(/%/g,'%25').replace(/&/g,'%26').replace(/=/g,'%3D').replace(/\?/g,'%3F').replace(/\|/g,'%7C'), rows=[], errs=[];
   for(const R of Rs){ try{ if(isT(R)){ errs.push(R+': templates are not exported'); continue; }
-    const {s,its,date,st,end,donor,vol,veh,bad,to}=await snap(R); if(bad) errs.push(R+': drop-off items do not line up with pickup items; to left blank');
+    const {s,its,date,st,end,donor,multi,donorOf,vol,veh,bad,to}=await snap(R); if(bad) errs.push(R+': drop-off items do not line up with pickup items; to left blank');
     its.forEach((it,k)=>{ const first=k===0, [cat,pack]=(it.type||'').split(' / ');
-      rows.push([R,it.id,first?date:'',first?st:'',first?end:'',first?donor:'',cat,pack,it.qty,it.lbs,String(it.desc||'').trim(),/^(true|1)$/.test(it.est)?'Y':'',to(k),first?vol:'',first?veh:'',first?s.status:''].map(enc)); });
+      rows.push([R,it.id,first?date:'',first?st:'',first?end:'',first||multi?donorOf(k):'',cat,pack,it.qty,it.lbs,String(it.desc||'').trim(),/^(true|1)$/.test(it.est)?'Y':'',to(k),first?vol:'',first?veh:'',first?s.status:''].map(enc)); });
     if(!its.length) rows.push([R,'',date,st,end,donor,'','','','','','','',vol,veh,s.status].map(enc));
   }catch(e){ errs.push(R+': '+e.message); } }
   return {errs,cols:XC.join(','),rows:rows.map(r=>r.join('|').replace(/\|+$/,''))}; };
@@ -242,7 +244,7 @@ const diff=async(rows=[])=>{ const plan=[], unchanged=[], newRescues=[], notes=[
           const eq=want.size===cur.size&&[...want].every(([n,q])=>[...cur].some(([m,p])=>sameTo(m,n)&&p===q)); if(!eq){ toChanged=true; dist.set(k,want); } }
         else if(o.to&&S0.bad) errs.push(R+': its drop-offs do not line up with its items; change recipients by name in the chat'); }
       else if(o.category||o.qty||o.description){ if(!o.category||!o.pack||!o.description) { errs.push(R+' row '+o._row+': a new item needs category, pack, qty and description'); continue; }
-        add.push({qty:nq(o.qty)??1,food:o.category,unit:o.pack,desc:o.description,...(o.lbs_each?{lbs:Math.ceil(+o.lbs_each)}:{}),...(/^y/i.test(o.estimated||'')?{est:true}:{})}); if(o.to) notes.push(R+' row '+o._row+': a new item\'s to is not split automatically; split it after it is added'); } }
+        add.push({...(o.donor?{donor:o.donor}:{}),qty:nq(o.qty)??1,food:o.category,unit:o.pack,desc:o.description,...(o.lbs_each?{lbs:Math.ceil(+o.lbs_each)}:{}),...(/^y/i.test(o.estimated||'')?{est:true}:{})}); if(o.to) notes.push(R+' row '+o._row+': a new item\'s to is not split automatically; split it after it is added'); } }
     if(Object.keys(items).length) C.items=items; if(add.length) C.add=add;
     if(toChanged){ const names=[]; const per=S0.its.map((it,k)=>{ const m=dist.get(k)||splitTo(S0.to(k),+it.qty); for(const n of m.keys()) if(!names.some(x=>sameTo(x,n))) names.push(S0.stops.find(x=>sameTo(x.name,n))?.name||n); return m; });
       const recips=names.map(n=>({to:n,qty:Object.fromEntries(S0.its.map((it,k)=>[S0.dids[k],[...per[k]].find(([m])=>sameTo(m,n))?.[1]||0]))})).filter(x=>Object.values(x.qty).some(q=>q>0));
